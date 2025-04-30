@@ -11,7 +11,7 @@ registerBlockType('rpb/related-posts', {
     attributes: {
         title: {
             type: 'string',
-            default: '',
+            default: 'Related Post',
         },
     },
     edit: ({ attributes, setAttributes }) => {
