@@ -1,129 +1,169 @@
 <?php
 /**
  * Plugin Name: Related Posts Block
- * Description: Outputs 3 recent related posts from the same category. Supports a shortcode and a Gutenberg block.
- * Version: 1.0
+ * Description: Shows 3 related posts from the same category. Use via a shortcode [related_posts] or Gutenberg block.
+ * Version: 1.3
  * Author: Your Name
  * Text Domain: related-posts-block
  */
 
-if (!defined('ABSPATH')) exit; // Just a safety check — stops someone from loading this file directly in the browser.
+if (!defined('ABSPATH')) exit; // Don't run if accessed directly
 
-// ------------------------------------------------------
-// Load our CSS file for styling the related posts box.
-// ------------------------------------------------------
+/**
+ * Enqueue plugin stylesheet on the frontend
+ */
 function rpb_enqueue_assets() {
     wp_enqueue_style(
         'rpb-style',
-        plugin_dir_url(__FILE__) . 'style.css', // Where the CSS file is
-        [], // No dependencies
-        '1.0' // Version number
+        plugin_dir_url(__FILE__) . 'style.css',
+        [],
+        '1.3'
     );
 }
 add_action('wp_enqueue_scripts', 'rpb_enqueue_assets');
 
-// ------------------------------------------------------------------
-// This function handles all the logic for fetching and displaying 
-// 3 related posts from the same category as the current post.
-// ------------------------------------------------------------------
+/**
+ * Add admin submenu under Tools to clear the related posts cache
+ */
+function rpb_register_admin_menu() {
+    add_submenu_page(
+        'tools.php',
+        'Related Posts Cache',
+        'Related Posts Cache',
+        'manage_options',
+        'rpb-clear-cache',
+        'rpb_cache_admin_page'
+    );
+}
+add_action('admin_menu', 'rpb_register_admin_menu');
+
+/**
+ * Admin page UI for clearing transients
+ */
+function rpb_cache_admin_page() {
+    // If the form was submitted and nonce is valid
+    if (isset($_POST['rpb_clear_cache']) && check_admin_referer('rpb_clear_cache_action')) {
+        global $wpdb;
+        // Delete cached related posts transients
+        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_rpb_related_%'");
+        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_timeout_rpb_related_%'");
+        echo '<div class="notice notice-success is-dismissible"><p>Related posts cache cleared.</p></div>';
+    }
+
+    // Output form
+    echo '<div class="wrap"><h1>Related Posts Cache</h1>';
+    echo '<form method="POST">';
+    wp_nonce_field('rpb_clear_cache_action'); // Security nonce
+    submit_button('Clear Related Posts Cache', 'primary', 'rpb_clear_cache');
+    echo '</form></div>';
+}
+
+/**
+ * Generate HTML for related posts
+ */
 function rpb_get_related_posts_html($title = '') {
-    // Only show this on single post pages — no need on home, archive, etc.
-    if (!is_single()) return '';
+    if (!is_single() || (defined('REST_REQUEST') && REST_REQUEST)) return '';
 
     global $post;
     $post_id = $post->ID;
 
-    // Grab the categories this post belongs to
+    // Get current post categories
     $categories = get_the_category($post_id);
-    if (empty($categories)) return ''; // If there are no categories, nothing to relate
+    if (empty($categories)) return '';
 
-    // Get only the category IDs into an array
     $category_ids = wp_list_pluck($categories, 'term_id');
-    sort($category_ids); // Helps keep our cache key consistent
-
-    // Create a unique cache key using the post ID + category IDs
+    sort($category_ids); // Ensure consistent cache key
     $cache_key = 'rpb_related_' . $post_id . '_' . md5(implode('_', $category_ids));
 
-    // If we already have the result cached, just return that
-    $cached = get_transient($cache_key);
-    if ($cached !== false) return $cached;
+    // Check if we should bypass cache (for debugging)
+    $debug = isset($_GET['rpb_debug']) && $_GET['rpb_debug'] === '1';
 
-    // No cache? Let’s run the query to find related posts
+    if (!$debug) {
+        $cached = get_transient($cache_key);
+        if ($cached !== false) return $cached;
+    }
+
+    // Query for 3 recent posts in the same category, excluding current post
     $query = new WP_Query([
-        'post_type'           => 'post',
-        'posts_per_page'      => 3,
-        'post__not_in'        => [$post_id], // Don’t include the current post
-        'category__in'        => $category_ids,
-        'orderby'             => 'date', // Show most recent ones first
-        'order'               => 'DESC',
+        'post_type' => 'post',
+        'posts_per_page' => 3,
+        'post__not_in' => [$post_id],
+        'category__in' => $category_ids,
+        'orderby' => 'date',
+        'order' => 'DESC',
         'ignore_sticky_posts' => true,
     ]);
 
-    // No posts found? We’re done.
-    if (!$query->have_posts()) return '';
-
-    // Start capturing the HTML output
-    ob_start();
-
-    echo '<div class="rpb-related-posts">';
-
-    // If the user gave us a title, show it
-    if (!empty($title)) {
-        echo '<h3>' . esc_html($title) . '</h3>';
+    if (!$query->have_posts()) {
+        wp_reset_postdata();
+        return '';
     }
 
+    // Build the output HTML
+    ob_start();
+    echo '<div class="rpb-related-posts">';
+    if (!empty($title)) echo '<h3 class="rpb-related-heading">' . esc_html($title) . '</h3>';
     echo '<ul>';
 
-    // Loop through the results and output the list
     while ($query->have_posts()) {
         $query->the_post();
-        echo '<li><a href="' . esc_url(get_permalink()) . '">' . esc_html(get_the_title()) . '</a></li>';
+        $post_time = get_the_date();
+        $category = !empty($categories) ? $categories[0]->name : '';
+        
+        echo '<li class="rpb-item">';
+        if (has_post_thumbnail()) {
+            echo '<a href="' . esc_url(get_permalink()) . '" class="rpb-thumb">';
+            echo get_the_post_thumbnail(get_the_ID(), 'medium'); 
+            echo '</a>';
+        }
+        echo '<div class="rpb-content">';
+        echo '<a href="' . esc_url(get_permalink()) . '" class="rpb-title">' . esc_html(get_the_title()) . '</a>';
+        echo '<div class="rpb-meta">' . esc_html($post_time) . ' • ' . esc_html($category) . '</div>';
+        echo '</div>'; // Close .rpb-content
+        echo '</li>';
     }
 
-    echo '</ul>';
-    echo '</div>';
-
-    wp_reset_postdata(); // Always reset after a custom loop
+    echo '</ul></div>';
+    wp_reset_postdata();
 
     $output = ob_get_clean();
 
-    // Save this output in a transient so it loads faster next time
-    set_transient($cache_key, $output, HOUR_IN_SECONDS);
+    // Save output to cache
+    if (!$debug) {
+        set_transient($cache_key, $output, HOUR_IN_SECONDS);
+    }
 
     return $output;
 }
 
-// --------------------------------------------------------
-// This makes the [related_posts title="..."] shortcode work.
-// --------------------------------------------------------
+/**
+ * Register [related_posts] shortcode
+ */
 function rpb_related_posts_shortcode($atts) {
     $atts = shortcode_atts(['title' => ''], $atts, 'related_posts');
     return rpb_get_related_posts_html($atts['title']);
 }
 add_shortcode('related_posts', 'rpb_related_posts_shortcode');
 
-// --------------------------------------------------------
-// This is where we register the Gutenberg block.
-// --------------------------------------------------------
+/**
+ * Register Gutenberg block
+ */
 function rpb_register_block() {
-    // Let’s make sure Gutenberg functions are available
     if (!function_exists('register_block_type')) return;
 
-    // Register the JS file used in the block editor
     wp_register_script(
         'rpb-block-editor',
         plugin_dir_url(__FILE__) . 'block.js',
-        ['wp-blocks', 'wp-element', 'wp-editor'],
-        filemtime(__FILE__) // Use the file time to avoid caching issues
+        ['wp-blocks', 'wp-element', 'wp-editor', 'wp-components'],
+        filemtime(__FILE__)
     );
 
-    // Register the block with WordPress
     register_block_type('rpb/related-posts', [
-        'editor_script'   => 'rpb-block-editor', // Load our JS file in the editor
-        'render_callback' => 'rpb_render_block', // Render using PHP (not saved HTML)
-        'attributes'      => [
+        'editor_script' => 'rpb-block-editor',
+        'render_callback' => 'rpb_render_block',
+        'attributes' => [
             'title' => [
-                'type'    => 'string',
+                'type' => 'string',
                 'default' => '',
             ],
         ],
@@ -131,10 +171,11 @@ function rpb_register_block() {
 }
 add_action('init', 'rpb_register_block');
 
-// --------------------------------------------------------
-// This is the function that renders the block on the front end.
-// --------------------------------------------------------
+/**
+ * Server-side render callback for the block
+ */
 function rpb_render_block($attributes) {
     $title = isset($attributes['title']) ? sanitize_text_field($attributes['title']) : '';
     return rpb_get_related_posts_html($title);
 }
+
