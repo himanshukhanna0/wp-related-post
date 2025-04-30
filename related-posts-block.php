@@ -58,31 +58,51 @@ function rpb_cache_admin_page() {
     echo '</form></div>';
 }
 
+if (isset($_GET['rpb_reset'])) {
+    delete_transient($cache_key);
+}
 /**
  * Generate HTML for related posts
  */
-function rpb_get_related_posts_html($title = '') {
-    if (!is_single() || (defined('REST_REQUEST') && REST_REQUEST)) return '';
+
+
+function rpb_get_related_posts_html($attributes) {
+    
+    if (defined('REST_REQUEST') && REST_REQUEST) return '';
 
     global $post;
-    $post_id = $post->ID;
+    $post_id = isset($post->ID) ? $post->ID : 0;
 
-    // Get current post categories
+    // sanitize and set the title
+    $title = isset($attributes['title']) ? sanitize_text_field($attributes['title']) : 'Related Posts';
+
+    //build cache key
     $categories = get_the_category($post_id);
-    if (empty($categories)) return '';
-
     $category_ids = wp_list_pluck($categories, 'term_id');
-    sort($category_ids); // Ensure consistent cache key
-    $cache_key = 'rpb_related_' . $post_id . '_' . md5(implode('_', $category_ids));
+    sort($category_ids);
 
-    // Check if we should bypass cache (for debugging)
+    $context = is_single() ? 'single' : 'page';
+    $key_parts = implode('_', [
+        $context,
+        $post_id,
+        implode('-', $category_ids),
+        md5($title)
+    ]);
+    $cache_key = 'rpb_related_' . $key_parts;
+
+    // Logging
+    // error_log("Category IDs: " . print_r($category_ids, true));
+
     $debug = isset($_GET['rpb_debug']) && $_GET['rpb_debug'] === '1';
 
     if (!$debug) {
         $cached = get_transient($cache_key);
-        if ($cached !== false) return $cached;
+        if ($cached !== false) {
+            // error_log("USING CACHED OUTPUT: $cache_key");
+            return $cached;
+        }
     }
-
+    
     // Query for 3 recent posts in the same category, excluding current post
     $query = new WP_Query([
         'post_type' => 'post',
@@ -93,16 +113,18 @@ function rpb_get_related_posts_html($title = '') {
         'order' => 'DESC',
         'ignore_sticky_posts' => true,
     ]);
-
+    
     if (!$query->have_posts()) {
         wp_reset_postdata();
         return '';
     }
-
+    
+    $title = isset($attributes['title']) ? sanitize_text_field($attributes['title']) : 'Related Posts';
     // Build the output HTML
     ob_start();
     echo '<div class="rpb-related-posts">';
     if (!empty($title)) echo '<h3 class="rpb-related-heading">' . esc_html($title) . '</h3>';
+
     echo '<ul>';
 
     while ($query->have_posts()) {
@@ -113,13 +135,13 @@ function rpb_get_related_posts_html($title = '') {
         echo '<li class="rpb-item">';
         if (has_post_thumbnail()) {
             echo '<a href="' . esc_url(get_permalink()) . '" class="rpb-thumb">';
-            echo get_the_post_thumbnail(get_the_ID(), 'medium'); 
+            echo get_the_post_thumbnail(get_the_ID(), 'medium'); // Changed from 'thumbnail' to 'medium'
             echo '</a>';
         }
         echo '<div class="rpb-content">';
         echo '<a href="' . esc_url(get_permalink()) . '" class="rpb-title">' . esc_html(get_the_title()) . '</a>';
         echo '<div class="rpb-meta">' . esc_html($post_time) . ' • ' . esc_html($category) . '</div>';
-        echo '</div>'; // Close .rpb-content
+        echo '</div>';
         echo '</li>';
     }
 
@@ -128,9 +150,9 @@ function rpb_get_related_posts_html($title = '') {
 
     $output = ob_get_clean();
 
-    // Save output to cache
-    if (!$debug) {
+    if (!$debug && !empty($output)) {
         set_transient($cache_key, $output, HOUR_IN_SECONDS);
+        error_log("CACHE SET for $cache_key (" . strlen($output) . " bytes)");
     }
 
     return $output;
@@ -140,8 +162,10 @@ function rpb_get_related_posts_html($title = '') {
  * Register [related_posts] shortcode
  */
 function rpb_related_posts_shortcode($atts) {
-    $atts = shortcode_atts(['title' => ''], $atts, 'related_posts');
-    return rpb_get_related_posts_html($atts['title']);
+    $atts = shortcode_atts(['title' => 'Related Posts'], $atts, 'related_posts');
+    return rpb_get_related_posts_html([
+        'title' => $atts['title'],
+    ]);
 }
 add_shortcode('related_posts', 'rpb_related_posts_shortcode');
 
@@ -175,7 +199,5 @@ add_action('init', 'rpb_register_block');
  * Server-side render callback for the block
  */
 function rpb_render_block($attributes) {
-    $title = isset($attributes['title']) ? sanitize_text_field($attributes['title']) : '';
-    return rpb_get_related_posts_html($title);
+    return rpb_get_related_posts_html($attributes);
 }
-

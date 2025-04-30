@@ -66,6 +66,17 @@ You can also use a shortcode if you prefer classic editor or template use.
 
 ---
 
+### Syntax:
+
+```
+[related_posts title="something"]
+```
+
+- `Title` is optional
+- The shortcode output is styled exactly like the block
+
+---
+
 ## ⚡ Caching
 
 This plugin includes optional caching to improve performance by storing the rendered output of related posts. This avoids running repeated database queries on every page load.
@@ -92,17 +103,8 @@ If you're a developer, you can clear it using this code snippet:
 ```php
 delete_transient('rpb_related_posts_cache_' . get_the_ID());
 ```
-
-### Syntax:
-
-```
-[related_posts Title:"More like this"]
-```
-
-- `Title` is optional
-- The shortcode output is styled exactly like the block
-
 ---
+
 
 ## 🎨 Styling & Layout
 
